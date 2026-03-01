@@ -30,5 +30,14 @@ PIVOT_WINDOW: int = int(_get("PIVOT_WINDOW", "5"))
 SR_CLUSTER_PCT: float = float(_get("SR_CLUSTER_PCT", "0.005"))
 BOT_INTERVAL_SECONDS: int = int(_get("BOT_INTERVAL_SECONDS", "300"))
 DRY_RUN: bool = _get("DRY_RUN", "true").lower() in ("true", "1", "yes")
+DRY_RUN_BALANCE: float = float(_get("DRY_RUN_BALANCE", "10000.0"))
 LOG_LEVEL: str = _get("LOG_LEVEL", "INFO").upper()
 TRADE_LOG_FILE: str = _get("TRADE_LOG_FILE", "trades.json")
+
+# ── Pair auto-selection ────────────────────────────────────────────────────────
+AUTO_SELECT_PAIR: bool = _get("AUTO_SELECT_PAIR", "false").lower() in ("true", "1", "yes")
+CANDIDATE_PAIRS: list[str] = [
+    p.strip()
+    for p in _get("CANDIDATE_PAIRS", "BTC-USD,ETH-USD,SOL-USD").split(",")
+    if p.strip()
+]

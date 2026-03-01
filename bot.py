@@ -65,6 +65,7 @@ class BotState:
     def __init__(self) -> None:
         self.position = Position()
         self.entry_time: int = 0
+        self.active_pair: str = config.TRADING_PAIR
 
         # Adaptive parameters (updated after each trade)
         self.win_rate: float = 0.5
@@ -94,14 +95,15 @@ class BotState:
 
 def run() -> None:
     """Entry point – runs the bot loop until interrupted."""
+    pair_display = "AUTO" if config.AUTO_SELECT_PAIR else config.TRADING_PAIR
     logger.info(
         "Starting trader bot  pair=%s  dry_run=%s  interval=%ds",
-        config.TRADING_PAIR,
+        pair_display,
         config.DRY_RUN,
         config.BOT_INTERVAL_SECONDS,
     )
 
-    if not config.API_KEY or not config.API_SECRET:
+    if not config.DRY_RUN and (not config.API_KEY or not config.API_SECRET):
         logger.error(
             "COINBASE_API_KEY and COINBASE_API_SECRET must be set in the .env file."
         )
@@ -131,9 +133,13 @@ def run() -> None:
 
 def _run_cycle(client: CoinbaseClient, state: BotState) -> None:
     """Execute one evaluation cycle."""
+    # ── 0. Auto-select best pair when flat ─────────────────────────────────────
+    if config.AUTO_SELECT_PAIR and not state.position.is_open:
+        state.active_pair = _select_pair(client, state)
+
     # ── 1. Fetch candles ───────────────────────────────────────────────────────
     raw_candles = client.get_candles(
-        product_id=config.TRADING_PAIR,
+        product_id=state.active_pair,
         granularity=config.CANDLE_GRANULARITY,
         n_candles=config.LOOKBACK_CANDLES,
     )
@@ -145,7 +151,7 @@ def _run_cycle(client: CoinbaseClient, state: BotState) -> None:
     price = candles[-1].close
     logger.info(
         "Cycle  pair=%s  price=%.4f  candles=%d  position=%s",
-        config.TRADING_PAIR,
+        state.active_pair,
         price,
         len(candles),
         "OPEN" if state.position.is_open else "FLAT",
@@ -190,7 +196,7 @@ def _execute_buy(
         return
 
     result = client.place_market_buy(
-        product_id=config.TRADING_PAIR,
+        product_id=state.active_pair,
         quote_size=quote_to_spend,
     )
 
@@ -221,14 +227,14 @@ def _execute_sell(
 ) -> None:
     """Close the open position."""
     result = client.place_market_sell(
-        product_id=config.TRADING_PAIR,
+        product_id=state.active_pair,
         base_size=state.position.base_size,
     )
 
     pnl_pct = (price - state.position.entry_price) / state.position.entry_price
 
     record = learning.TradeRecord(
-        product_id=config.TRADING_PAIR,
+        product_id=state.active_pair,
         side="SELL",
         entry_price=state.position.entry_price,
         exit_price=price,
@@ -254,6 +260,70 @@ def _execute_sell(
     state.position = Position()
     state.entry_time = 0
     state.refresh_metrics()
+
+
+def _score_opportunity(decision: Decision, price: float) -> float:
+    """Return an opportunity score for a trading pair (higher = better entry).
+
+    Only BUY signals receive a positive score.  The score combines the
+    reward-to-risk ratio with relative volatility (ATR as a % of price) so
+    that high-quality set-ups on volatile pairs rank first.
+    """
+    if decision.action != "BUY":
+        return 0.0
+    risk = price - decision.stop_loss
+    if risk <= 0 or price <= 0:
+        return 0.0
+    rr = (decision.take_profit - price) / risk
+    atr_pct = decision.atr / price
+    return rr * atr_pct
+
+
+def _select_pair(client: CoinbaseClient, state: BotState) -> str:
+    """Evaluate every candidate pair and return the one with the best entry.
+
+    Falls back to ``state.active_pair`` when no pair produces a BUY signal or
+    when all candidate fetches fail.
+    """
+    best_pair = state.active_pair
+    best_score = -1.0
+
+    for pair in config.CANDIDATE_PAIRS:
+        try:
+            raw = client.get_candles(
+                product_id=pair,
+                granularity=config.CANDLE_GRANULARITY,
+                n_candles=config.LOOKBACK_CANDLES,
+            )
+            if not raw:
+                continue
+            candles = [Candle(**c) for c in raw]
+            decision = evaluate(
+                candles=candles,
+                position=Position(),
+                win_rate=state.win_rate,
+                avg_win=state.avg_win,
+                avg_loss=state.avg_loss,
+            )
+            price = candles[-1].close
+            score = _score_opportunity(decision, price)
+            logger.debug(
+                "Pair scan  pair=%s  action=%s  score=%.6f",
+                pair,
+                decision.action,
+                score,
+            )
+            if score > best_score:
+                best_score = score
+                best_pair = pair
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning("Skipping pair %s during scan: %s", pair, exc)
+
+    if best_pair != state.active_pair:
+        logger.info(
+            "Auto-selected pair: %s  score=%.6f", best_pair, best_score
+        )
+    return best_pair
 
 
 def _sleep(seconds: float) -> None:
