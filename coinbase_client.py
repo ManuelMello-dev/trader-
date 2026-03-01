@@ -66,9 +66,9 @@ class CoinbaseClient:
             granularity=granularity,
         )
 
-        raw: list[dict] = response.get("candles", [])
+        candle_objects = response.candles or []
         # API returns newest-first; reverse to oldest-first
-        raw = sorted(raw, key=lambda c: int(c["start"]))
+        raw = sorted(candle_objects, key=lambda c: int(c["start"]))
         # Normalise to float values
         candles = [
             {
@@ -86,12 +86,12 @@ class CoinbaseClient:
     def get_ticker(self, product_id: str) -> dict[str, Any]:
         """Return the best bid/ask/last price for *product_id*."""
         response = self._client.get_best_bid_ask(product_ids=[product_id])
-        pricebooks = response.get("pricebooks", [])
+        pricebooks = response.pricebooks or []
         if not pricebooks:
             raise ValueError(f"No ticker data returned for {product_id}")
         pb = pricebooks[0]
-        best_bid = float(pb["bids"][0]["price"]) if pb.get("bids") else None
-        best_ask = float(pb["asks"][0]["price"]) if pb.get("asks") else None
+        best_bid = float(pb["bids"][0]["price"]) if pb["bids"] else None
+        best_ask = float(pb["asks"][0]["price"]) if pb["asks"] else None
         mid = (best_bid + best_ask) / 2 if best_bid and best_ask else None
         return {"bid": best_bid, "ask": best_ask, "mid": mid}
 
@@ -100,10 +100,11 @@ class CoinbaseClient:
     def get_balance(self, currency: str) -> float:
         """Return the available balance for *currency* (e.g. ``"USD"`` or ``"BTC"``)."""
         response = self._client.get_accounts()
-        accounts = response.get("accounts", [])
+        accounts = response.accounts or []
         for account in accounts:
-            if account.get("currency") == currency:
-                return float(account.get("available_balance", {}).get("value", 0))
+            if account["currency"] == currency:
+                balance = account["available_balance"]
+                return float(balance["value"] if balance else 0)
         return 0.0
 
     # ── Orders ─────────────────────────────────────────────────────────────────
