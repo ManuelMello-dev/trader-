@@ -98,7 +98,13 @@ class CoinbaseClient:
     # ── Account ────────────────────────────────────────────────────────────────
 
     def get_balance(self, currency: str) -> float:
-        """Return the available balance for *currency* (e.g. ``"USD"`` or ``"BTC"``)."""
+        """Return the available balance for *currency* (e.g. ``"USD"`` or ``"BTC"``).
+
+        In dry-run mode a simulated balance of ``config.DRY_RUN_BALANCE`` is
+        returned immediately without making an authenticated API call.
+        """
+        if config.DRY_RUN:
+            return config.DRY_RUN_BALANCE
         response = self._client.get_accounts()
         accounts = response.accounts or []
         for account in accounts:
